@@ -1,0 +1,25 @@
+# Backend / API
+fastapi
+uvicorn[standard]
+pillow
+sqlalchemy
+requests
+
+# YOLO / OCR
+ultralytics
+torch
+torchvision
+opencv-python
+easyocr
+
+# Utilidades / Tratamento
+numpy
+pandas
+
+# Frontend
+streamlit
+
+# Extras
+python-dotenv
+loguru
+fastapi-cors
