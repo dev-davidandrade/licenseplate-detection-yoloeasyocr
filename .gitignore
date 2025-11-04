@@ -1,0 +1,16 @@
+# Ambiente Virtual
+venv/
+.vscode/
+
+# Arquivos Temporários
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.tmp
+*.log
+*.DS_Store
+
+# Uploads locais ou pastas temporárias (se existirem)
+uploads/
+temp/

@@ -1,7 +1,0 @@
-user string
-tree (
-	branch (
-		if user == andre { print ("André é corno")
-				} else { print ("André não deixa de ser corno") }
-		)
-	)
