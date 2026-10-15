@@ -1,11 +1,12 @@
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 
-DB_PATH = "plates.db"
+DB_PATH = Path(__file__).resolve().parents[1] / "plates.db"
 
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
     cursor.execute(
         """
@@ -22,7 +23,7 @@ def init_db():
 
 
 def save_plate_result(result):
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
     cursor.execute(
         """
