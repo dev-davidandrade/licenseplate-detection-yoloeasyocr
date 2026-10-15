@@ -1,177 +1,377 @@
-import streamlit as st
-from ultralytics import YOLO
-import easyocr
+from __future__ import annotations
+
+import sys
+import tempfile
+import time
+from pathlib import Path
+
 import cv2
-from PIL import Image
 import numpy as np
-import re
+import pandas as pd
+import streamlit as st
+from PIL import Image
 
 
-def clean_text(raw: str) -> str:
-    return re.sub(r"[^A-Z0-9]", "", raw.upper())
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-
-def is_valid_plate(text: str) -> bool:
-    return bool(re.match(r"^[A-Z0-9]{6,7}$", text))
-
-
-def best_plate_from_ocr_results(ocr_results):
-    candidates = []
-    for _, text, conf in ocr_results:
-        txt = clean_text(text)
-        if not txt:
-            continue
-        if txt in ["BR", "BRASIL", "MERCOSUL"]:
-            continue
-        candidates.append((txt, float(conf)))
-
-    if not candidates:
-        return None, 0.0, []
-
-    valid = [c for c in candidates if is_valid_plate(c[0])]
-    sorted_candidates = sorted(candidates, key=lambda x: x[1], reverse=True)
-
-    if valid:
-        best = max(valid, key=lambda x: x[1])
-    else:
-        best = sorted_candidates[0]
-
-    return best[0], best[1], sorted_candidates
-
-
-def preprocess_variants(plate_rgb):
-    h, w = plate_rgb.shape[:2]
-    gray = cv2.cvtColor(plate_rgb, cv2.COLOR_RGB2GRAY)
-
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    gray_clahe = clahe.apply(gray)
-
-    bilateral = cv2.bilateralFilter(gray_clahe, 9, 75, 75)
-
-    thresh = cv2.adaptiveThreshold(
-        bilateral, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
-    )
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-
-    scale = 2.0
-    new_w = int(w * scale)
-    new_h = int(h * scale)
-    resized_rgb = cv2.resize(plate_rgb, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
-    resized_gray = cv2.cvtColor(resized_rgb, cv2.COLOR_RGB2GRAY)
-    resized_bilateral = cv2.bilateralFilter(resized_gray, 9, 75, 75)
-    resized_thresh = cv2.adaptiveThreshold(
-        resized_bilateral, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
-    )
-
-    return [
-        ("gray_clahe", gray_clahe),
-        ("bilateral", bilateral),
-        ("thresh", thresh),
-        ("morph", morph),
-        ("resized_gray", resized_gray),
-        ("resized_thresh", resized_thresh),
-    ]
-
-
-st.set_page_config(page_title="Leitor de Placas", page_icon="🚗")
-st.title("🚗 Leitor de Placas - YOLO + OCR (versão refinada)")
-st.write(
-    "Envie uma imagem de um veículo para detectar e ler a placa com precisão aprimorada."
+from backend.services.recognition import (  # noqa: E402
+    PlateDetection,
+    load_default_recognizer,
+)
+from backend.services.temporal import (  # noqa: E402
+    PlateReading,
+    TemporalPlateAggregator,
+    parse_authorized_plates,
 )
 
-model = YOLO("../backend/weights/weights_best.pt")
-reader = easyocr.Reader(["pt"], gpu=False)
 
-uploaded_file = st.file_uploader("Envie uma imagem", type=["jpg", "png", "jpeg"])
+@st.cache_resource(show_spinner=False)
+def load_recognizer():
+    return load_default_recognizer()
 
-if uploaded_file:
-    image = Image.open(uploaded_file).convert("RGB")
-    img_np = np.array(image)
 
-    if len(img_np.shape) == 2 or (len(img_np.shape) == 3 and img_np.shape[2] == 1):
-        img_np = cv2.cvtColor(img_np, cv2.COLOR_GRAY2RGB)
+def annotate_image(image_rgb: np.ndarray, detections: list[PlateDetection]) -> np.ndarray:
+    annotated = image_rgb.copy()
+    for detection in detections:
+        x1, y1, x2, y2 = detection.box
+        color = (
+            (0, 190, 0) if detection.valid_brazilian_plate else (255, 165, 0)
+        )
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
+        label = detection.normalized_text or detection.raw_text or "placa"
+        cv2.putText(
+            annotated,
+            f"{label} {detection.detector_confidence:.2f}",
+            (x1, max(24, y1 - 10)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+    return annotated
 
-    st.image(img_np, caption="Imagem Enviada", use_container_width=True)
 
-    results = model(img_np)
+def add_detection_to_aggregator(
+    aggregator: TemporalPlateAggregator,
+    detection: PlateDetection,
+    frame_index: int,
+    time_seconds: float,
+) -> None:
+    aggregator.add(
+        PlateReading(
+            raw_text=detection.raw_text,
+            normalized_text=detection.normalized_text,
+            detector_confidence=detection.detector_confidence,
+            ocr_confidence=detection.ocr_confidence,
+            quality_score=detection.quality_score,
+            frame_index=frame_index,
+            time_seconds=time_seconds,
+        )
+    )
 
-    if len(results[0].boxes) == 0:
-        st.warning("Nenhuma placa detectada. Tente outra imagem!")
+
+def analyze_video(
+    uploaded_file,
+    recognizer,
+    sample_fps: float,
+    max_seconds: int,
+    progress,
+) -> dict[str, object]:
+    suffix = Path(uploaded_file.name).suffix or ".mp4"
+    temporary_path = None
+    capture = None
+    started_at = time.perf_counter()
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temporary:
+            temporary.write(uploaded_file.getbuffer())
+            temporary_path = Path(temporary.name)
+
+        capture = cv2.VideoCapture(str(temporary_path))
+        if not capture.isOpened():
+            raise ValueError("O vídeo não pôde ser aberto pelo OpenCV.")
+
+        source_fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
+        source_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        frame_limit = min(source_frames, int(max_seconds * source_fps))
+        stride = max(1, round(source_fps / sample_fps))
+        expected_samples = max(1, (frame_limit + stride - 1) // stride)
+
+        aggregator = TemporalPlateAggregator()
+        evidence = []
+        frame_index = 0
+        sampled_frames = 0
+        frames_with_detections = 0
+        while frame_index < frame_limit:
+            ok, frame_bgr = capture.read()
+            if not ok:
+                break
+            if frame_index % stride == 0:
+                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                detections = recognizer.analyze_image(frame_rgb)
+                sampled_frames += 1
+                if detections:
+                    frames_with_detections += 1
+                for detection in detections:
+                    timestamp = frame_index / source_fps
+                    add_detection_to_aggregator(
+                        aggregator, detection, frame_index, timestamp
+                    )
+                    evidence.append(
+                        {
+                            "detection": detection,
+                            "frame_index": frame_index,
+                            "time_seconds": timestamp,
+                        }
+                    )
+                progress.progress(
+                    min(sampled_frames / expected_samples, 1.0),
+                    text=f"Analisando amostra {sampled_frames} de {expected_samples}",
+                )
+            frame_index += 1
+        capture.release()
+
+        evidence.sort(
+            key=lambda item: item["detection"].evidence_score,
+            reverse=True,
+        )
+        elapsed = time.perf_counter() - started_at
+        return {
+            "source_name": uploaded_file.name,
+            "source_size": uploaded_file.size,
+            "source_fps": source_fps,
+            "resolution": f"{width} × {height}",
+            "duration_analyzed": frame_index / source_fps,
+            "sampled_frames": sampled_frames,
+            "frames_with_detections": frames_with_detections,
+            "detections": len(evidence),
+            "processing_seconds": elapsed,
+            "processing_fps": sampled_frames / elapsed if elapsed else 0.0,
+            "aggregator": aggregator,
+            "evidence": evidence[:12],
+        }
+    finally:
+        if capture is not None:
+            capture.release()
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def show_detection_cards(detections: list[PlateDetection]) -> None:
+    for index, detection in enumerate(detections, start=1):
+        st.divider()
+        image_column, result_column = st.columns([1, 2])
+        with image_column:
+            st.image(
+                detection.crop_rgb,
+                caption=f"Recorte #{index}",
+                use_container_width=True,
+            )
+        with result_column:
+            normalized = detection.normalized_text or "Não reconhecida"
+            st.metric("Leitura", normalized)
+            st.write(f"Texto bruto: `{detection.raw_text or 'vazio'}`")
+            st.write(f"Confiança do detector: {detection.detector_confidence:.1%}")
+            st.write(f"Confiança do OCR: {detection.ocr_confidence:.1%}")
+            st.write(f"Qualidade do recorte: {detection.quality_score:.1%}")
+            if detection.valid_brazilian_plate:
+                st.success("A leitura possui um formato brasileiro válido.")
+            else:
+                st.warning("A leitura ainda não forma uma placa brasileira válida.")
+
+
+def show_video_result(
+    result: dict[str, object],
+    authorized_plates: set[str],
+    min_confirmations: int,
+) -> None:
+    st.subheader("Resumo do vídeo")
+    columns = st.columns(4)
+    columns[0].metric("Quadros analisados", result["sampled_frames"])
+    columns[1].metric("Com detecção", result["frames_with_detections"])
+    columns[2].metric("Detecções", result["detections"])
+    columns[3].metric("Velocidade", f"{result['processing_fps']:.1f} FPS")
+    st.caption(
+        f"{result['resolution']} · {result['source_fps']:.1f} FPS de origem · "
+        f"{result['duration_analyzed']:.1f} s analisados em "
+        f"{result['processing_seconds']:.1f} s"
+    )
+
+    aggregator = result["aggregator"]
+    candidates = aggregator.candidates()
+    if candidates:
+        st.write("#### Candidatos acumulados")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Placa": candidate.plate,
+                        "Leituras": candidate.votes,
+                        "Leituras exatas": candidate.raw_exact_votes,
+                        "Evidência ponderada": candidate.weighted_score,
+                        "Melhor confiança": candidate.best_confidence,
+                    }
+                    for candidate in candidates
+                ]
+            ),
+            hide_index=True,
+            use_container_width=True,
+        )
     else:
-        for i, box in enumerate(results[0].boxes):
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            conf = float(box.conf[0].item())
+        st.warning("Nenhuma leitura formou uma placa brasileira válida.")
 
-            display_img = cv2.cvtColor(img_np.copy(), cv2.COLOR_RGB2BGR)
-            cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(
-                display_img,
-                f"Conf: {conf:.2f}",
-                (x1, y1 - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0),
-                2,
+    if authorized_plates:
+        decision = aggregator.decide(
+            authorized_plates,
+            min_votes=min_confirmations,
+            min_raw_exact_votes=1,
+        )
+        if decision.authorized:
+            st.success(
+                f"✅ Acesso simulado autorizado para {decision.plate}: "
+                f"{decision.votes} confirmações."
+            )
+        elif decision.plate:
+            st.warning(
+                f"⏳ {decision.plate} apareceu, mas ainda não atingiu os critérios "
+                f"de confirmação ({decision.reason})."
+            )
+        else:
+            st.error("⛔ Nenhuma placa autorizada foi confirmada.")
+    else:
+        st.info("Cadastre placas na barra lateral para simular a decisão de acesso.")
+
+    evidence = result["evidence"]
+    if evidence:
+        st.write("#### Melhores recortes")
+        columns = st.columns(3)
+        for index, item in enumerate(evidence[:9]):
+            detection = item["detection"]
+            label = detection.normalized_text or detection.raw_text or "sem leitura"
+            columns[index % 3].image(
+                detection.crop_rgb,
+                caption=(
+                    f"{item['time_seconds']:.1f}s · {label} · "
+                    f"qualidade {detection.quality_score:.0%}"
+                ),
+                use_container_width=True,
             )
 
-            h, w = y2 - y1, x2 - x1
-            cut_top, cut_bottom, cut_sides = int(h * 0.25), int(h * 0.05), int(w * 0.05)
-            y1n, y2n = max(0, y1 + cut_top), min(img_np.shape[0], y2 - cut_bottom)
-            x1n, x2n = max(0, x1 + cut_sides), min(img_np.shape[1], x2 - cut_sides)
 
-            plate_crop = img_np[y1n:y2n, x1n:x2n]
-            if plate_crop.size == 0:
-                st.error("Recorte inválido — coordenadas fora da imagem.")
-                continue
+st.set_page_config(
+    page_title="Leitor de placas",
+    page_icon="🚗",
+    layout="wide",
+)
 
-            variants = preprocess_variants(plate_crop)
-            all_candidates = []
+st.title("🚗 Leitor de placas")
+st.caption("Protótipo experimental com YOLOv8, EasyOCR e decisão temporal")
 
-            for name, var_img in variants:
-                try:
-                    ocr_res = reader.readtext(var_img)
-                except Exception:
-                    try:
-                        ocr_res = reader.readtext(
-                            cv2.cvtColor(var_img, cv2.COLOR_GRAY2RGB)
-                        )
-                    except Exception:
-                        ocr_res = []
-                for _, txt, conf_txt in ocr_res:
-                    all_candidates.append((None, txt, conf_txt))
+with st.sidebar:
+    st.header("Entrada")
+    input_mode = st.radio(
+        "Escolha a origem",
+        ["Enviar imagem", "Usar câmera", "Analisar vídeo"],
+    )
+    st.divider()
+    st.header("Veículos autorizados")
+    authorized_raw = st.text_area(
+        "Uma placa por linha",
+        placeholder="ABC1234\nBRA2E19",
+        help="Somente placas brasileiras válidas entram na simulação.",
+    )
+    authorized_plates = parse_authorized_plates(authorized_raw)
+    if authorized_raw and not authorized_plates:
+        st.warning("Nenhuma placa cadastrada possui formato válido.")
+    elif authorized_plates:
+        st.caption(f"{len(authorized_plates)} placa(s) válida(s)")
 
-            best_text, best_conf, sorted_candidates = best_plate_from_ocr_results(
-                all_candidates
+    if input_mode == "Analisar vídeo":
+        st.divider()
+        st.header("Amostragem")
+        sample_fps = st.slider("Análises por segundo", 1, 5, 2)
+        max_seconds = st.slider("Limite do vídeo (segundos)", 5, 120, 30, 5)
+        min_confirmations = st.slider("Confirmações para autorizar", 2, 5, 2)
+
+if input_mode == "Enviar imagem":
+    source = st.file_uploader(
+        "Selecione uma imagem de veículo",
+        type=["jpg", "jpeg", "png", "webp"],
+    )
+elif input_mode == "Usar câmera":
+    source = st.camera_input("Fotografe a placa do veículo")
+else:
+    video_source = st.file_uploader(
+        "Selecione um vídeo",
+        type=["mp4", "mov", "avi", "m4v", "mkv"],
+    )
+    st.caption(
+        "Nesta fase, use preferencialmente um vídeo com apenas um veículo-alvo. "
+        "O rastreamento de múltiplos veículos ainda é experimental."
+    )
+    if video_source is None:
+        st.info("Envie um vídeo para iniciar a análise temporal.")
+        st.stop()
+
+    if st.button("Analisar vídeo", type="primary", use_container_width=True):
+        progress = st.progress(0.0, text="Preparando o vídeo")
+        try:
+            with st.spinner("Carregando os modelos..."):
+                recognizer = load_recognizer()
+            result = analyze_video(
+                video_source,
+                recognizer,
+                float(sample_fps),
+                max_seconds,
+                progress,
             )
+            st.session_state["video_result"] = result
+            progress.empty()
+        except Exception as error:
+            progress.empty()
+            st.exception(error)
 
-            if not best_text:
-                best_text = "Não detectado"
-                best_conf = 0.0
+    saved_result = st.session_state.get("video_result")
+    if (
+        saved_result
+        and saved_result["source_name"] == video_source.name
+        and saved_result["source_size"] == video_source.size
+    ):
+        show_video_result(saved_result, authorized_plates, min_confirmations)
+    st.stop()
 
-            st.markdown(f"### Detecção #{i+1} — Conf (YOLO): {conf:.2f}")
+if source is None:
+    st.info("Envie uma imagem ou faça uma fotografia para iniciar a análise.")
+    st.stop()
 
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                st.image(
-                    cv2.cvtColor(display_img, cv2.COLOR_BGR2RGB),
-                    caption="Imagem com box",
-                    use_container_width=True,
-                )
-                st.image(
-                    plate_crop, caption="Recorte da placa", use_container_width=True
-                )
+image_rgb = np.array(Image.open(source).convert("RGB"))
+with st.spinner("Carregando os modelos e analisando a imagem..."):
+    recognizer = load_recognizer()
+    detections = recognizer.analyze_image(image_rgb)
 
-            with col2:
-                st.write("**Melhor leitura:**")
-                st.write(f"**{best_text}** (conf OCR: {best_conf:.2f})")
+st.subheader("Resultado")
+st.image(
+    annotate_image(image_rgb, detections),
+    caption="Imagem analisada",
+    use_container_width=True,
+)
+if not detections:
+    st.warning("Nenhuma placa foi localizada nesta imagem.")
+    st.stop()
 
-                st.write("**Candidatos:**")
-                if sorted_candidates:
-                    for txt, conf_txt in sorted_candidates[:8]:
-                        st.write(f"- `{txt}` — conf {conf_txt:.2f}")
-                else:
-                    st.write("Nenhum candidato OCR encontrado.")
-
-            st.write("---")
+if authorized_plates:
+    preliminary_matches = [
+        detection.normalized_text
+        for detection in detections
+        if detection.normalized_text in authorized_plates
+    ]
+    if preliminary_matches:
+        st.info(
+            f"Correspondência preliminar com {preliminary_matches[0]}. "
+            "Uma imagem isolada não autoriza o acesso na política temporal."
+        )
+show_detection_cards(detections)
