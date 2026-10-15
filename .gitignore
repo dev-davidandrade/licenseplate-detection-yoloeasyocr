@@ -1,5 +1,6 @@
 # Ambiente Virtual
 venv/
+.venv/
 .vscode/
 
 # Arquivos Temporários
@@ -14,3 +15,11 @@ __pycache__/
 # Uploads locais ou pastas temporárias (se existirem)
 uploads/
 temp/
+
+# Dados e resultados locais
+dataset/
+runs/
+artifacts/
+.cache/
+Ultralytics/
+videos_teste/
