@@ -1,6 +1,7 @@
 # Backend / API
 fastapi
 uvicorn[standard]
+python-multipart
 pillow
 sqlalchemy
 requests
@@ -22,4 +23,3 @@ streamlit
 # Extras
 python-dotenv
 loguru
-fastapi-cors
