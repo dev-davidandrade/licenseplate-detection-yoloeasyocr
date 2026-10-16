@@ -3,6 +3,7 @@ from typing import Literal
 
 
 PlateFormat = Literal["old", "mercosul"]
+PLATE_CHARACTER_COUNT = 7
 
 OLD_PLATE_PATTERN = re.compile(r"^[A-Z]{3}[0-9]{4}$")
 MERCOSUL_PLATE_PATTERN = re.compile(r"^[A-Z]{3}[0-9][A-Z][0-9]{2}$")
@@ -37,8 +38,18 @@ def clean_text(raw: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", raw.upper())
 
 
+def plate_character_count(text: str) -> int:
+    return len(clean_text(text))
+
+
+def has_complete_plate_length(text: str) -> bool:
+    return plate_character_count(text) == PLATE_CHARACTER_COUNT
+
+
 def plate_format(text: str) -> PlateFormat | None:
     cleaned = clean_text(text)
+    if not has_complete_plate_length(cleaned):
+        return None
     if OLD_PLATE_PATTERN.fullmatch(cleaned):
         return "old"
     if MERCOSUL_PLATE_PATTERN.fullmatch(cleaned):
@@ -81,7 +92,7 @@ def normalize_plate_text(
     preferred_format: PlateFormat | None = None,
 ) -> str:
     cleaned = clean_text(raw)
-    if len(cleaned) != 7:
+    if not has_complete_plate_length(cleaned):
         return cleaned
 
     masks: dict[PlateFormat, str] = {

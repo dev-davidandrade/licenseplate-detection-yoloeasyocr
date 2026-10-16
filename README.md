@@ -34,6 +34,19 @@ de indicar autorização. Essa decisão é experimental e não controla hardware
 A documentação interativa fica em `http://localhost:8000/docs`. O endpoint
 `POST /ocr` recebe a imagem em memória e não preserva o arquivo enviado.
 
+## Critério de identificação
+
+O detector pode localizar a região de uma placa mesmo quando o OCR lê apenas
+parte do texto. O sistema mantém essa leitura bruta para diagnóstico, mas só
+considera uma placa identificada quando há exatamente 7 caracteres e o texto
+corresponde a um dos formatos brasileiros suportados:
+
+- placa antiga: `ABC1234`;
+- placa Mercosul: `ABC1D23`.
+
+Leituras parciais, longas demais ou fora desses formatos não entram na decisão
+temporal, não autorizam acesso e não são persistidas como placas identificadas.
+
 ## Processamento de vídeos
 
 O comando abaixo analisa cinco quadros por segundo, cria vídeos anotados e
