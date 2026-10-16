@@ -47,6 +47,6 @@ async def detect_plate(file: UploadFile = File(...)):
 
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     result = await run_in_threadpool(process_plate_array, image_rgb)
-    if result["plate_text"] != "Não detectado":
+    if result["valid_brazilian_plate"]:
         save_plate_result(result)
     return result

@@ -20,6 +20,7 @@ from backend.services.recognition import (  # noqa: E402
     PlateDetection,
     load_default_recognizer,
 )
+from backend.services.plate_utils import PLATE_CHARACTER_COUNT  # noqa: E402
 from backend.services.temporal import (  # noqa: E402
     PlateReading,
     TemporalPlateAggregator,
@@ -40,7 +41,14 @@ def annotate_image(image_rgb: np.ndarray, detections: list[PlateDetection]) -> n
             (0, 190, 0) if detection.valid_brazilian_plate else (255, 165, 0)
         )
         cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
-        label = detection.normalized_text or detection.raw_text or "placa"
+        if detection.valid_brazilian_plate:
+            label = detection.normalized_text
+        elif detection.recognition_status == "partial":
+            label = f"parcial: {detection.raw_text}"
+        elif detection.recognition_status == "invalid":
+            label = f"invalida: {detection.raw_text}"
+        else:
+            label = "sem leitura"
         cv2.putText(
             annotated,
             f"{label} {detection.detector_confidence:.2f}",
@@ -172,16 +180,46 @@ def show_detection_cards(detections: list[PlateDetection]) -> None:
                 use_container_width=True,
             )
         with result_column:
-            normalized = detection.normalized_text or "Não reconhecida"
-            st.metric("Leitura", normalized)
+            displayed_text = (
+                detection.normalized_text
+                or detection.raw_text
+                or "Não reconhecida"
+            )
+            if detection.valid_brazilian_plate:
+                metric_label = "Placa identificada"
+            elif detection.recognition_status == "partial":
+                metric_label = "Leitura parcial do OCR"
+            else:
+                metric_label = "Leitura inválida do OCR"
+            st.metric(metric_label, displayed_text)
             st.write(f"Texto bruto: `{detection.raw_text or 'vazio'}`")
+            st.write(
+                "Caracteres reconhecidos: "
+                f"{detection.character_count}/{PLATE_CHARACTER_COUNT}"
+            )
             st.write(f"Confiança do detector: {detection.detector_confidence:.1%}")
             st.write(f"Confiança do OCR: {detection.ocr_confidence:.1%}")
             st.write(f"Qualidade do recorte: {detection.quality_score:.1%}")
             if detection.valid_brazilian_plate:
-                st.success("A leitura possui um formato brasileiro válido.")
+                st.success(
+                    "Placa brasileira completa. Esta leitura pode participar "
+                    "da confirmação temporal."
+                )
+            elif detection.recognition_status == "partial":
+                st.warning(
+                    "Leitura parcial: são necessários exatamente 7 caracteres. "
+                    "Este resultado não será usado para identificar ou autorizar."
+                )
+            elif detection.recognition_status == "unreadable":
+                st.warning(
+                    "A região da placa foi localizada, mas o OCR não reconheceu "
+                    "caracteres."
+                )
             else:
-                st.warning("A leitura ainda não forma uma placa brasileira válida.")
+                st.warning(
+                    "A leitura tem tamanho ou formato incompatível com uma placa "
+                    "brasileira e não será usada para identificar ou autorizar."
+                )
 
 
 def show_video_result(

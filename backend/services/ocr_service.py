@@ -13,18 +13,37 @@ def process_plate_array(image_rgb: np.ndarray) -> dict[str, object]:
     if not detections:
         return {
             "plate_text": "Não detectado",
+            "raw_text": "",
+            "normalized_text": "",
             "confidence": 0.0,
             "ocr_confidence": 0.0,
+            "quality_score": 0.0,
+            "character_count": 0,
+            "complete_plate_length": False,
+            "recognition_status": "not_detected",
+            "valid_brazilian_plate": False,
             "detections": [],
         }
 
-    best = detections[0]
+    best = next(
+        (detection for detection in detections if detection.valid_brazilian_plate),
+        detections[0],
+    )
     return {
-        "plate_text": best.normalized_text or best.raw_text or "Não detectado",
+        "plate_text": (
+            best.normalized_text
+            if best.valid_brazilian_plate
+            else "Não identificado"
+        ),
         "raw_text": best.raw_text,
+        "normalized_text": best.normalized_text,
         "confidence": round(best.detector_confidence, 6),
         "ocr_confidence": round(best.ocr_confidence, 6),
         "quality_score": round(best.quality_score, 6),
+        "character_count": best.character_count,
+        "complete_plate_length": best.complete_plate_length,
+        "recognition_status": best.recognition_status,
+        "valid_brazilian_plate": best.valid_brazilian_plate,
         "detections": [detection.as_dict() for detection in detections],
     }
 

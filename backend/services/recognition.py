@@ -4,12 +4,19 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import cv2
 import numpy as np
 
-from backend.services.plate_utils import clean_text, is_valid_plate, normalize_plate_text
+from backend.services.plate_utils import (
+    PLATE_CHARACTER_COUNT,
+    clean_text,
+    has_complete_plate_length,
+    is_valid_plate,
+    normalize_plate_text,
+    plate_character_count,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -17,6 +24,7 @@ DEFAULT_WEIGHTS = PROJECT_ROOT / "backend" / "weights" / "weights_best.pt"
 DEFAULT_OCR_CACHE = PROJECT_ROOT / ".cache" / "easyocr"
 DEFAULT_ULTRALYTICS_CACHE = PROJECT_ROOT / ".cache" / "ultralytics"
 ALPHANUMERIC_ALLOWLIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+RecognitionStatus = Literal["identified", "partial", "invalid", "unreadable"]
 
 
 @dataclass
@@ -34,6 +42,24 @@ class PlateDetection:
         return is_valid_plate(self.normalized_text)
 
     @property
+    def character_count(self) -> int:
+        return plate_character_count(self.normalized_text or self.raw_text)
+
+    @property
+    def complete_plate_length(self) -> bool:
+        return has_complete_plate_length(self.normalized_text or self.raw_text)
+
+    @property
+    def recognition_status(self) -> RecognitionStatus:
+        if self.valid_brazilian_plate:
+            return "identified"
+        if self.character_count == 0:
+            return "unreadable"
+        if self.character_count < PLATE_CHARACTER_COUNT:
+            return "partial"
+        return "invalid"
+
+    @property
     def evidence_score(self) -> float:
         return (
             max(self.detector_confidence, 0.01)
@@ -49,6 +75,9 @@ class PlateDetection:
             "normalized_text": self.normalized_text,
             "ocr_confidence": round(self.ocr_confidence, 6),
             "quality_score": round(self.quality_score, 6),
+            "character_count": self.character_count,
+            "complete_plate_length": self.complete_plate_length,
+            "recognition_status": self.recognition_status,
             "valid_brazilian_plate": self.valid_brazilian_plate,
         }
 
