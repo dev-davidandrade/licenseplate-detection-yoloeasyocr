@@ -111,6 +111,13 @@ quadros foram recebidos, analisados e descartados. A frequência de análise é
 configurável; o vídeo da câmera pode ter 30 FPS sem exigir 30 inferências por
 segundo.
 
+Para câmeras fixas, a barra lateral permite delimitar uma região de interesse
+(ROI), desenhada em amarelo sobre a imagem. Somente essa região chega ao YOLO.
+Leituras só entram no consenso temporal quando satisfazem limites configuráveis
+de confiança do detector, confiança do OCR e qualidade do recorte. Os valores
+iniciais são provisórios e devem ser calibrados na divisão de validação da base
+brasileira, sem ajustar parâmetros no conjunto de teste.
+
 ## Organização principal
 
 - `backend/services/recognition.py`: detector e OCR compartilhados;
