@@ -268,3 +268,21 @@ de reconhecimento usado pela interface.
 8. Criar o container após estabilizar o fluxo de vídeo e as dependências.
 9. Comparar o modelo atual com um novo treinamento usando a mesma divisão de
    teste e as mesmas métricas.
+
+## Evolução após a baseline
+
+Atualização de 17 de outubro de 2026:
+
+- frontend e API passaram a compartilhar o mesmo serviço de reconhecimento;
+- leituras incompletas deixaram de ser tratadas como placas identificadas;
+- dependências foram fixadas em `pyproject.toml` e `uv.lock` para Python 3.12;
+- foi adicionada câmera contínua experimental com WebRTC e amostragem de
+  inferência configurável;
+- foram extraídos 135 recortes de validação e teste para revisão manual do OCR;
+- foi criada uma interface local para confirmar, rejeitar ou marcar como
+  ilegível cada rótulo;
+- o esqueleto do artigo foi registrado em `docs/artigo-base.md`.
+
+Os itens 5 e 6 dos riscos metodológicos originais foram tratados na engenharia
+do projeto. Permanecem como prioridades a revisão dos rótulos, a ampliação de
+placas Mercosul e a avaliação independente na câmera-alvo.
