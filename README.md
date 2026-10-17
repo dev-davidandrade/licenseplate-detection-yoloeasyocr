@@ -101,6 +101,16 @@ uv run python -m unittest discover -s tests -v
 Os números da baseline, as limitações do dataset e os experimentos em imagens
 e vídeos estão registrados em `docs/auditoria-inicial.md`.
 
+## Câmera contínua
+
+A entrada WebRTC usa uma fila *latest-only*: se novos quadros chegarem enquanto
+YOLO e EasyOCR estão ocupados, somente o quadro mais recente é convertido e
+analisado. Os anteriores saem da fila e são liberados, evitando atraso crescente
+e consumo desnecessário de memória. A interface mostra separadamente quantos
+quadros foram recebidos, analisados e descartados. A frequência de análise é
+configurável; o vídeo da câmera pode ter 30 FPS sem exigir 30 inferências por
+segundo.
+
 ## Organização principal
 
 - `backend/services/recognition.py`: detector e OCR compartilhados;
