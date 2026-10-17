@@ -20,6 +20,7 @@ from backend.services.temporal import (
 class RealtimeSnapshot:
     frames_received: int
     frames_processed: int
+    frames_discarded: int
     detections: int
     last_processing_seconds: float
     candidates: tuple[PlateCandidate, ...]
@@ -47,6 +48,7 @@ class RealtimePlateSession:
         self._next_analysis_at = float("-inf")
         self._frames_received = 0
         self._frames_processed = 0
+        self._frames_discarded = 0
         self._detections = 0
         self._last_processing_seconds = 0.0
         self._last_error = ""
@@ -74,6 +76,7 @@ class RealtimePlateSession:
             self._next_analysis_at = float("-inf")
             self._frames_received = 0
             self._frames_processed = 0
+            self._frames_discarded = 0
             self._detections = 0
             self._last_processing_seconds = 0.0
             self._last_error = ""
@@ -82,19 +85,32 @@ class RealtimePlateSession:
         self,
         image_rgb: np.ndarray,
         now_seconds: float | None = None,
+        received_frames: int = 1,
     ) -> list[PlateDetection] | None:
+        """Analyze only the newest frame from a camera batch when it is due.
+
+        ``received_frames`` includes the newest frame in ``image_rgb`` and any
+        older frames already discarded by the capture layer. Keeping this
+        accounting here makes backpressure visible without retaining images in
+        memory.
+        """
         now = self._clock() if now_seconds is None else float(now_seconds)
+        batch_size = max(1, int(received_frames))
         with self._state_lock:
-            self._frames_received += 1
+            self._frames_received += batch_size
+            self._frames_discarded += batch_size - 1
             if self._started_at is None:
                 self._started_at = now
             if now < self._next_analysis_at:
+                self._frames_discarded += 1
                 return None
             self._next_analysis_at = now + 1.0 / self._analyses_per_second
             frame_index = self._frames_received
             elapsed = now - self._started_at
 
         if not self._inference_lock.acquire(blocking=False):
+            with self._state_lock:
+                self._frames_discarded += 1
             return None
 
         started = self._clock()
@@ -130,6 +146,7 @@ class RealtimePlateSession:
             return RealtimeSnapshot(
                 frames_received=self._frames_received,
                 frames_processed=self._frames_processed,
+                frames_discarded=self._frames_discarded,
                 detections=self._detections,
                 last_processing_seconds=self._last_processing_seconds,
                 candidates=tuple(self._aggregator.candidates()),

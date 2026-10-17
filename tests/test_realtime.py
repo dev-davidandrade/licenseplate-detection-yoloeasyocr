@@ -44,6 +44,7 @@ class RealtimePlateSessionTests(unittest.TestCase):
         snapshot = session.snapshot()
         self.assertEqual(snapshot.frames_received, 3)
         self.assertEqual(snapshot.frames_processed, 2)
+        self.assertEqual(snapshot.frames_discarded, 1)
         self.assertEqual(recognizer.calls, 2)
 
     def test_uses_temporal_evidence_to_authorize_a_registered_plate(self):
@@ -75,7 +76,29 @@ class RealtimePlateSessionTests(unittest.TestCase):
         snapshot = session.snapshot()
         self.assertEqual(snapshot.frames_received, 0)
         self.assertEqual(snapshot.frames_processed, 0)
+        self.assertEqual(snapshot.frames_discarded, 0)
         self.assertEqual(snapshot.candidates, ())
+
+    def test_keeps_only_latest_frame_from_camera_backlog(self):
+        recognizer = StubRecognizer([[detection("ABC1234")]])
+        session = RealtimePlateSession(recognizer, analyses_per_second=2)
+
+        session.analyze_if_due(
+            self.image,
+            now_seconds=0.0,
+            received_frames=4,
+        )
+        session.analyze_if_due(
+            self.image,
+            now_seconds=0.1,
+            received_frames=3,
+        )
+
+        snapshot = session.snapshot()
+        self.assertEqual(snapshot.frames_received, 7)
+        self.assertEqual(snapshot.frames_processed, 1)
+        self.assertEqual(snapshot.frames_discarded, 6)
+        self.assertEqual(recognizer.calls, 1)
 
 
 if __name__ == "__main__":

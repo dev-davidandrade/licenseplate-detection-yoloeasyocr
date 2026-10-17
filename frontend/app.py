@@ -228,11 +228,12 @@ def show_detection_cards(detections: list[PlateDetection]) -> None:
 @st.fragment(run_every=1.0)
 def show_realtime_status(session: RealtimePlateSession) -> None:
     snapshot = session.snapshot()
-    columns = st.columns(4)
+    columns = st.columns(5)
     columns[0].metric("Quadros recebidos", snapshot.frames_received)
     columns[1].metric("Quadros analisados", snapshot.frames_processed)
-    columns[2].metric("Detecções", snapshot.detections)
-    columns[3].metric(
+    columns[2].metric("Descartados", snapshot.frames_discarded)
+    columns[3].metric("Detecções", snapshot.detections)
+    columns[4].metric(
         "Última análise",
         f"{snapshot.last_processing_seconds:.2f} s",
     )
@@ -281,8 +282,9 @@ def show_realtime_camera(
 ) -> None:
     st.subheader("Câmera em tempo real")
     st.caption(
-        "O vídeo continua fluido, mas YOLO e OCR analisam apenas a frequência "
-        "selecionada. Clique em START e permita o acesso à câmera."
+        "A fila mantém somente o quadro mais recente: imagens antigas são "
+        "descartadas enquanto YOLO e OCR trabalham. Clique em START e permita "
+        "o acesso à câmera."
     )
     with st.spinner("Carregando os modelos para a câmera..."):
         recognizer = load_recognizer()
@@ -301,19 +303,31 @@ def show_realtime_camera(
     if st.button("Limpar histórico da passagem", use_container_width=True):
         session.reset()
 
-    def process_video_frame(frame: VideoFrame) -> VideoFrame:
-        frame_bgr = frame.to_ndarray(format="bgr24")
+    async def process_queued_video_frames(
+        frames: list[VideoFrame],
+    ) -> list[VideoFrame]:
+        # streamlit-webrtc entrega todos os quadros acumulados desde a última
+        # chamada. Converter apenas o último evita gastar CPU e memória com
+        # imagens que já ficaram velhas para uma decisão em tempo real.
+        latest_frame = frames[-1]
+        frame_bgr = latest_frame.to_ndarray(format="bgr24")
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        detections = session.analyze_if_due(frame_rgb)
+        detections = session.analyze_if_due(
+            frame_rgb,
+            received_frames=len(frames),
+        )
         if detections is not None:
             frame_rgb = annotate_image(frame_rgb, detections)
         output_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-        return VideoFrame.from_ndarray(output_bgr, format="bgr24")
+        output_frame = VideoFrame.from_ndarray(output_bgr, format="bgr24")
+        output_frame.pts = latest_frame.pts
+        output_frame.time_base = latest_frame.time_base
+        return [output_frame]
 
     webrtc_streamer(
         key="license-plate-realtime-camera",
         mode=WebRtcMode.SENDRECV,
-        video_frame_callback=process_video_frame,
+        queued_video_frames_callback=process_queued_video_frames,
         media_stream_constraints={"video": True, "audio": False},
         async_processing=True,
         video_html_attrs={
