@@ -9,7 +9,9 @@ import cv2
 import numpy as np
 import pandas as pd
 import streamlit as st
+from av import VideoFrame
 from PIL import Image
+from streamlit_webrtc import WebRtcMode, webrtc_streamer
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +22,7 @@ from backend.services.recognition import (  # noqa: E402
     PlateDetection,
     load_default_recognizer,
 )
+from backend.services.realtime import RealtimePlateSession  # noqa: E402
 from backend.services.plate_utils import PLATE_CHARACTER_COUNT  # noqa: E402
 from backend.services.temporal import (  # noqa: E402
     PlateReading,
@@ -222,6 +225,106 @@ def show_detection_cards(detections: list[PlateDetection]) -> None:
                 )
 
 
+@st.fragment(run_every=1.0)
+def show_realtime_status(session: RealtimePlateSession) -> None:
+    snapshot = session.snapshot()
+    columns = st.columns(4)
+    columns[0].metric("Quadros recebidos", snapshot.frames_received)
+    columns[1].metric("Quadros analisados", snapshot.frames_processed)
+    columns[2].metric("Detecções", snapshot.detections)
+    columns[3].metric(
+        "Última análise",
+        f"{snapshot.last_processing_seconds:.2f} s",
+    )
+
+    if snapshot.last_error:
+        st.error(f"Erro durante a análise: {snapshot.last_error}")
+
+    if snapshot.candidates:
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Placa": candidate.plate,
+                        "Leituras": candidate.votes,
+                        "Leituras exatas": candidate.raw_exact_votes,
+                        "Melhor confiança": candidate.best_confidence,
+                    }
+                    for candidate in snapshot.candidates
+                ]
+            ),
+            hide_index=True,
+            use_container_width=True,
+        )
+    else:
+        st.caption("Nenhuma placa brasileira completa foi acumulada ainda.")
+
+    decision = snapshot.decision
+    if decision.authorized:
+        st.success(
+            f"✅ Acesso simulado autorizado para {decision.plate}: "
+            f"{decision.votes} confirmações."
+        )
+    elif decision.plate:
+        st.warning(
+            f"⏳ {decision.plate} detectada, aguardando mais evidências "
+            f"({decision.reason})."
+        )
+    elif decision.reason != "lista_vazia":
+        st.info("Nenhuma placa cadastrada foi confirmada.")
+
+
+def show_realtime_camera(
+    authorized_plates: set[str],
+    analyses_per_second: int,
+    min_confirmations: int,
+) -> None:
+    st.subheader("Câmera em tempo real")
+    st.caption(
+        "O vídeo continua fluido, mas YOLO e OCR analisam apenas a frequência "
+        "selecionada. Clique em START e permita o acesso à câmera."
+    )
+    with st.spinner("Carregando os modelos para a câmera..."):
+        recognizer = load_recognizer()
+
+    session_key = "realtime_plate_session"
+    session = st.session_state.get(session_key)
+    if session is None or session.recognizer is not recognizer:
+        session = RealtimePlateSession(recognizer)
+        st.session_state[session_key] = session
+    session.configure(
+        analyses_per_second=analyses_per_second,
+        authorized_plates=authorized_plates,
+        min_confirmations=min_confirmations,
+    )
+
+    if st.button("Limpar histórico da passagem", use_container_width=True):
+        session.reset()
+
+    def process_video_frame(frame: VideoFrame) -> VideoFrame:
+        frame_bgr = frame.to_ndarray(format="bgr24")
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        detections = session.analyze_if_due(frame_rgb)
+        if detections is not None:
+            frame_rgb = annotate_image(frame_rgb, detections)
+        output_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+        return VideoFrame.from_ndarray(output_bgr, format="bgr24")
+
+    webrtc_streamer(
+        key="license-plate-realtime-camera",
+        mode=WebRtcMode.SENDRECV,
+        video_frame_callback=process_video_frame,
+        media_stream_constraints={"video": True, "audio": False},
+        async_processing=True,
+        video_html_attrs={
+            "autoPlay": True,
+            "controls": False,
+            "muted": True,
+        },
+    )
+    show_realtime_status(session)
+
+
 def show_video_result(
     result: dict[str, object],
     authorized_plates: set[str],
@@ -313,7 +416,12 @@ with st.sidebar:
     st.header("Entrada")
     input_mode = st.radio(
         "Escolha a origem",
-        ["Enviar imagem", "Usar câmera", "Analisar vídeo"],
+        [
+            "Enviar imagem",
+            "Fotografar com câmera",
+            "Câmera em tempo real",
+            "Analisar vídeo",
+        ],
     )
     st.divider()
     st.header("Veículos autorizados")
@@ -334,13 +442,36 @@ with st.sidebar:
         sample_fps = st.slider("Análises por segundo", 1, 5, 2)
         max_seconds = st.slider("Limite do vídeo (segundos)", 5, 120, 30, 5)
         min_confirmations = st.slider("Confirmações para autorizar", 2, 5, 2)
+    elif input_mode == "Câmera em tempo real":
+        st.divider()
+        st.header("Processamento ao vivo")
+        realtime_analyses_per_second = st.slider(
+            "Análises por segundo",
+            1,
+            5,
+            2,
+        )
+        realtime_min_confirmations = st.slider(
+            "Confirmações para autorizar",
+            2,
+            5,
+            2,
+        )
+
+if input_mode == "Câmera em tempo real":
+    show_realtime_camera(
+        authorized_plates,
+        realtime_analyses_per_second,
+        realtime_min_confirmations,
+    )
+    st.stop()
 
 if input_mode == "Enviar imagem":
     source = st.file_uploader(
         "Selecione uma imagem de veículo",
         type=["jpg", "jpeg", "png", "webp"],
     )
-elif input_mode == "Usar câmera":
+elif input_mode == "Fotografar com câmera":
     source = st.camera_input("Fotografe a placa do veículo")
 else:
     video_source = st.file_uploader(
