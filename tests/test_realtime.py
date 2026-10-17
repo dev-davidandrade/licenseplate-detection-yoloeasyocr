@@ -3,17 +3,26 @@ import unittest
 import numpy as np
 
 from backend.services.recognition import PlateDetection
-from backend.services.realtime import RealtimePlateSession
+from backend.services.realtime import (
+    EvidenceThresholds,
+    RealtimePlateSession,
+    RegionOfInterest,
+)
 
 
-def detection(text: str) -> PlateDetection:
+def detection(
+    text: str,
+    detector_confidence: float = 0.9,
+    ocr_confidence: float = 0.8,
+    quality_score: float = 0.7,
+) -> PlateDetection:
     return PlateDetection(
         box=(0, 0, 10, 10),
-        detector_confidence=0.9,
+        detector_confidence=detector_confidence,
         raw_text=text,
         normalized_text=text,
-        ocr_confidence=0.8,
-        quality_score=0.7,
+        ocr_confidence=ocr_confidence,
+        quality_score=quality_score,
         crop_rgb=np.zeros((10, 10, 3), dtype=np.uint8),
     )
 
@@ -22,8 +31,10 @@ class StubRecognizer:
     def __init__(self, outputs):
         self.outputs = list(outputs)
         self.calls = 0
+        self.last_image_shape = None
 
-    def analyze_image(self, _image):
+    def analyze_image(self, image):
+        self.last_image_shape = image.shape
         output = self.outputs[min(self.calls, len(self.outputs) - 1)]
         self.calls += 1
         return output
@@ -99,6 +110,41 @@ class RealtimePlateSessionTests(unittest.TestCase):
         self.assertEqual(snapshot.frames_processed, 1)
         self.assertEqual(snapshot.frames_discarded, 6)
         self.assertEqual(recognizer.calls, 1)
+
+    def test_rejects_weak_ocr_readings_from_temporal_evidence(self):
+        recognizer = StubRecognizer(
+            [
+                [detection("ABC1234", ocr_confidence=0.20)],
+                [detection("ABC1234", ocr_confidence=0.80)],
+            ]
+        )
+        session = RealtimePlateSession(
+            recognizer,
+            analyses_per_second=2,
+            authorized_plates={"ABC1234"},
+            min_confirmations=2,
+            evidence_thresholds=EvidenceThresholds(min_ocr_confidence=0.30),
+        )
+
+        session.analyze_if_due(self.image, now_seconds=0.0)
+        session.analyze_if_due(self.image, now_seconds=0.5)
+
+        snapshot = session.snapshot()
+        self.assertEqual(snapshot.evidence_accepted, 1)
+        self.assertEqual(snapshot.evidence_rejected, 1)
+        self.assertFalse(snapshot.decision.authorized)
+
+    def test_analyzes_only_roi_and_translates_detection_to_full_frame(self):
+        recognizer = StubRecognizer([[detection("ABC1234")]])
+        session = RealtimePlateSession(
+            recognizer,
+            roi=RegionOfInterest(left=0.25, top=0.25, right=0.75, bottom=0.75),
+        )
+
+        detections = session.analyze_if_due(self.image, now_seconds=0.0)
+
+        self.assertEqual(recognizer.last_image_shape, (10, 10, 3))
+        self.assertEqual(detections[0].box, (5, 5, 15, 15))
 
 
 if __name__ == "__main__":

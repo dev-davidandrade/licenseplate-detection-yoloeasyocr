@@ -96,6 +96,10 @@ caracteres alfanuméricos e normaliza o resultado conforme os formatos
 `ABC1234` e `ABC1D23`. Leituras incompletas são mantidas para diagnóstico, mas
 não participam da identificação ou autorização. Em vídeo, leituras válidas são
 acumuladas por passagem e comparadas com uma lista de veículos autorizados.
+Na câmera fixa, uma região de interesse configurável reduz a área enviada ao
+detector. Antes do consenso, uma barreira de evidência aplica limites mínimos
+de confiança do detector, confiança do OCR e qualidade do recorte. Esses
+limites devem ser definidos na validação e mantidos fixos durante o teste.
 
 ### 3.2 Dataset do detector
 

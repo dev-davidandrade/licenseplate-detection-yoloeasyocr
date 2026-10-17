@@ -22,7 +22,11 @@ from backend.services.recognition import (  # noqa: E402
     PlateDetection,
     load_default_recognizer,
 )
-from backend.services.realtime import RealtimePlateSession  # noqa: E402
+from backend.services.realtime import (  # noqa: E402
+    EvidenceThresholds,
+    RealtimePlateSession,
+    RegionOfInterest,
+)
 from backend.services.plate_utils import PLATE_CHARACTER_COUNT  # noqa: E402
 from backend.services.temporal import (  # noqa: E402
     PlateReading,
@@ -237,6 +241,10 @@ def show_realtime_status(session: RealtimePlateSession) -> None:
         "Última análise",
         f"{snapshot.last_processing_seconds:.2f} s",
     )
+    st.caption(
+        f"Evidências aceitas: {snapshot.evidence_accepted} · "
+        f"rejeitadas pelos filtros: {snapshot.evidence_rejected}"
+    )
 
     if snapshot.last_error:
         st.error(f"Erro durante a análise: {snapshot.last_error}")
@@ -279,6 +287,8 @@ def show_realtime_camera(
     authorized_plates: set[str],
     analyses_per_second: int,
     min_confirmations: int,
+    evidence_thresholds: EvidenceThresholds,
+    roi: RegionOfInterest,
 ) -> None:
     st.subheader("Câmera em tempo real")
     st.caption(
@@ -298,6 +308,8 @@ def show_realtime_camera(
         analyses_per_second=analyses_per_second,
         authorized_plates=authorized_plates,
         min_confirmations=min_confirmations,
+        evidence_thresholds=evidence_thresholds,
+        roi=roi,
     )
 
     if st.button("Limpar histórico da passagem", use_container_width=True):
@@ -318,6 +330,15 @@ def show_realtime_camera(
         )
         if detections is not None:
             frame_rgb = annotate_image(frame_rgb, detections)
+        height, width = frame_rgb.shape[:2]
+        roi_x1, roi_y1, roi_x2, roi_y2 = roi.pixel_box(width, height)
+        cv2.rectangle(
+            frame_rgb,
+            (roi_x1, roi_y1),
+            (roi_x2 - 1, roi_y2 - 1),
+            (255, 196, 0),
+            2,
+        )
         output_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
         output_frame = VideoFrame.from_ndarray(output_bgr, format="bgr24")
         output_frame.pts = latest_frame.pts
@@ -471,12 +492,72 @@ with st.sidebar:
             5,
             2,
         )
+        with st.expander("Região de interesse"):
+            roi_horizontal = st.slider(
+                "Faixa horizontal (%)",
+                0,
+                100,
+                (0, 100),
+                help="Delimite onde os veículos passam na imagem.",
+            )
+            roi_vertical = st.slider(
+                "Faixa vertical (%)",
+                0,
+                100,
+                (0, 100),
+                help="A moldura amarela mostra a região analisada.",
+            )
+        if (
+            roi_horizontal[0] == roi_horizontal[1]
+            or roi_vertical[0] == roi_vertical[1]
+        ):
+            st.warning("A região precisa ter largura e altura maiores que zero.")
+            realtime_roi = RegionOfInterest()
+        else:
+            realtime_roi = RegionOfInterest(
+                left=roi_horizontal[0] / 100,
+                top=roi_vertical[0] / 100,
+                right=roi_horizontal[1] / 100,
+                bottom=roi_vertical[1] / 100,
+            )
+        with st.expander("Filtros de evidência"):
+            st.caption(
+                "Valores provisórios: serão calibrados com a base brasileira."
+            )
+            min_detector_confidence = st.slider(
+                "Confiança mínima do detector",
+                0.25,
+                0.95,
+                0.50,
+                0.05,
+            )
+            min_ocr_confidence = st.slider(
+                "Confiança mínima do OCR",
+                0.05,
+                0.95,
+                0.30,
+                0.05,
+            )
+            min_crop_quality = st.slider(
+                "Qualidade mínima do recorte",
+                0.0,
+                1.0,
+                0.50,
+                0.05,
+            )
+        realtime_evidence_thresholds = EvidenceThresholds(
+            min_detector_confidence=min_detector_confidence,
+            min_ocr_confidence=min_ocr_confidence,
+            min_quality_score=min_crop_quality,
+        )
 
 if input_mode == "Câmera em tempo real":
     show_realtime_camera(
         authorized_plates,
         realtime_analyses_per_second,
         realtime_min_confirmations,
+        realtime_evidence_thresholds,
+        realtime_roi,
     )
     st.stop()
 
