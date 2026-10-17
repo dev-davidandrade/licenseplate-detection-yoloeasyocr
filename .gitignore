@@ -1,6 +1,7 @@
 # Ambiente Virtual
 venv/
 .venv/
+.venv-broken-uv/
 .vscode/
 
 # Arquivos Temporários
@@ -15,6 +16,7 @@ __pycache__/
 # Uploads locais ou pastas temporárias (se existirem)
 uploads/
 temp/
+tmp/
 
 # Dados e resultados locais
 dataset/
