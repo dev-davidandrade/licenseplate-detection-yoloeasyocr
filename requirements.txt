@@ -1,25 +1,19 @@
-# Backend / API
-fastapi
-uvicorn[standard]
-python-multipart
-pillow
-sqlalchemy
-requests
-
-# YOLO / OCR
-ultralytics
-torch
-torchvision
-opencv-python
-easyocr
-
-# Utilidades / Tratamento
-numpy
-pandas
-
-# Frontend
-streamlit
-
-# Extras
-python-dotenv
-loguru
+# Arquivo de compatibilidade para quem ainda usa pip.
+# A fonte principal das dependências é pyproject.toml + uv.lock.
+easyocr==1.7.2
+fastapi==0.143.2
+loguru==0.7.3
+numpy==2.5.4
+opencv-python==5.0.0.93
+pandas==3.0.6
+pillow==12.3.0
+python-dotenv==1.2.4
+python-multipart==0.0.32
+requests==2.34.2
+sqlalchemy==2.1.4
+streamlit==1.66.0
+streamlit-webrtc==0.78.1
+torch==2.14.1
+torchvision==0.29.1
+ultralytics==8.4.177
+uvicorn[standard]==0.54.0

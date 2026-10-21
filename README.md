@@ -7,28 +7,45 @@ um primeiro mecanismo de decisão temporal.
 
 ## Preparação no Windows
 
+O projeto usa Python 3.12.10 e mantém versões reproduzíveis em `uv.lock`.
+
 ```powershell
-py -3.12 -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
+uv sync
 ```
+
+O `uv sync` lê `pyproject.toml` e `uv.lock`, instala o Python indicado em
+`.python-version` quando necessário e cria/atualiza `.venv`. Para ativar esse
+ambiente manualmente no PowerShell, use:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+A ativação é opcional: `uv run <comando>` já executa o comando dentro da
+`.venv` correta. Não é necessário rodar `python -m venv .venv` antes de
+`uv sync`.
+
+Para quem ainda não usa `uv`, o `requirements.txt` permanece disponível com
+as mesmas versões fixadas.
 
 ## Interface
 
 ```powershell
-.venv\Scripts\python.exe -m streamlit run frontend\app.py
+uv run streamlit run frontend\app.py
 ```
 
 Abra `http://localhost:8501` se o navegador não abrir automaticamente. Na
 primeira análise, o carregamento dos modelos pode levar alguns segundos.
 
-Na barra lateral é possível cadastrar placas autorizadas. Em vídeos, a
-simulação exige leituras repetidas e pelo menos uma leitura bruta exata antes
-de indicar autorização. Essa decisão é experimental e não controla hardware.
+Na barra lateral é possível cadastrar placas autorizadas. A interface oferece
+imagem, fotografia, vídeo e uma câmera contínua experimental via WebRTC. Nos
+modos temporais, a simulação exige leituras repetidas e pelo menos uma leitura
+bruta exata antes de indicar autorização. Essa decisão não controla hardware.
 
 ## API
 
 ```powershell
-.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
+uv run uvicorn backend.main:app --reload
 ```
 
 A documentação interativa fica em `http://localhost:8000/docs`. O endpoint
@@ -53,7 +70,7 @@ O comando abaixo analisa cinco quadros por segundo, cria vídeos anotados e
 salva cada detecção em CSV. A pasta de entrada pode estar fora do repositório.
 
 ```powershell
-.venv\Scripts\python.exe -m scripts.process_videos `
+uv run python -m scripts.process_videos `
   --input S:\videos_teste `
   --sample-fps 5 `
   --output-dir artifacts\video-results
@@ -62,10 +79,23 @@ salva cada detecção em CSV. A pasta de entrada pode estar fora do repositório
 Para fazer somente uma triagem rápida do detector, acrescente `--skip-ocr`.
 Os resultados locais ficam em `artifacts/`, que não é versionada.
 
+## Base OCR revisada
+
+Gere 135 recortes das caixas verdadeiras de validação e teste:
+
+```powershell
+uv run python -m scripts.build_ocr_review_set
+```
+
+Depois, execute a interface e abra a página **Revisar base OCR**. O manifesto e
+os recortes ficam em `artifacts/ocr-review/`; as sugestões derivadas dos nomes
+dos arquivos só viram rótulos após confirmação manual. O protocolo completo
+está em `docs/base-ocr-revisada.md`.
+
 ## Testes
 
 ```powershell
-.venv\Scripts\python.exe -m unittest discover -s tests -v
+uv run python -m unittest discover -s tests -v
 ```
 
 Os números da baseline, as limitações do dataset e os experimentos em imagens
@@ -74,7 +104,9 @@ e vídeos estão registrados em `docs/auditoria-inicial.md`.
 ## Organização principal
 
 - `backend/services/recognition.py`: detector e OCR compartilhados;
+- `backend/services/realtime.py`: amostragem e estado da câmera contínua;
 - `backend/services/temporal.py`: consenso e política de autorização;
 - `frontend/app.py`: demonstração interativa;
+- `frontend/pages/1_Revisar_base_OCR.py`: revisão manual dos rótulos OCR;
 - `scripts/`: benchmarks e processamento em lote;
 - `tests/`: regras de placa, qualidade, decisão temporal e API.
