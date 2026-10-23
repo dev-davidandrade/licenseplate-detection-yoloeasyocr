@@ -535,7 +535,7 @@ with st.sidebar:
                 "Confiança mínima do OCR",
                 0.05,
                 0.95,
-                0.30,
+                0.60,
                 0.05,
             )
             min_crop_quality = st.slider(
