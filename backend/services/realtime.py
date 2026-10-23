@@ -35,7 +35,7 @@ class EvidenceThresholds:
     """Provisional safety gates for readings entering temporal consensus."""
 
     min_detector_confidence: float = 0.50
-    min_ocr_confidence: float = 0.30
+    min_ocr_confidence: float = 0.60
     min_quality_score: float = 0.50
 
     def __post_init__(self) -> None:

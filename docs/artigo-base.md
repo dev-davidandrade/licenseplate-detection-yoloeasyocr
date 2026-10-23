@@ -184,6 +184,12 @@ anteriores. Assim, esses números documentam a baseline revisada, mas não são 
 estimativa final de generalização. O experimento definitivo deverá usar placas
 Mercosul e trajetórias externas mantidas fora da escolha de configuração.
 
+Na validação, elevar o limite mínimo de confiança do OCR de 0,30 para 0,60
+reduziu as evidências aceitas de 12 para 7 e aumentou a precisão entre as
+evidências aceitas de 50,0% para 85,7%, preservando os seis acertos
+normalizados. Esse limite é provisório e deverá ser recalibrado com placas
+Mercosul; ele não deve ser interpretado como universal.
+
 ### 4.3 Vídeos exploratórios
 
 Cinco vídeos, totalizando 215,1 segundos, produziram 441 quadros amostrados e

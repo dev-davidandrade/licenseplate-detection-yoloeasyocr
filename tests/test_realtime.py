@@ -134,6 +134,16 @@ class RealtimePlateSessionTests(unittest.TestCase):
         self.assertEqual(snapshot.evidence_rejected, 1)
         self.assertFalse(snapshot.decision.authorized)
 
+    def test_default_evidence_gate_uses_calibrated_ocr_threshold(self):
+        thresholds = EvidenceThresholds()
+
+        self.assertFalse(
+            thresholds.accepts(detection("ABC1234", ocr_confidence=0.59))
+        )
+        self.assertTrue(
+            thresholds.accepts(detection("ABC1234", ocr_confidence=0.60))
+        )
+
     def test_analyzes_only_roi_and_translates_detection_to_full_frame(self):
         recognizer = StubRecognizer([[detection("ABC1234")]])
         session = RealtimePlateSession(
