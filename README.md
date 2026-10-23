@@ -92,6 +92,15 @@ os recortes ficam em `artifacts/ocr-review/`; as sugestões derivadas dos nomes
 dos arquivos só viram rótulos após confirmação manual. O protocolo completo
 está em `docs/base-ocr-revisada.md`.
 
+Depois da revisão, compare as configurações do EasyOCR usando os rótulos
+confirmados por uma pessoa:
+
+```powershell
+uv run python -m scripts.compare_easyocr `
+  --manifest artifacts/ocr-review/manifest.csv `
+  --output-dir artifacts/easyocr-reviewed
+```
+
 ## Testes
 
 ```powershell

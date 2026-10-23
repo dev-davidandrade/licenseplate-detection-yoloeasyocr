@@ -11,6 +11,7 @@ from typing import Callable
 import cv2
 import easyocr
 
+from backend.services.plate_utils import normalize_plate_text
 from scripts.benchmark_ocr import (
     PLATE_PATTERN,
     clean_text,
@@ -133,9 +134,81 @@ def load_samples(dataset: Path, splits: list[str]) -> list[Sample]:
     return samples
 
 
+def load_reviewed_samples(manifest_path: Path, splits: list[str]) -> list[Sample]:
+    samples = []
+    with manifest_path.open("r", encoding="utf-8-sig", newline="") as input_file:
+        rows = csv.DictReader(input_file)
+        for row in rows:
+            if row.get("status") != "reviewed" or row.get("split") not in splits:
+                continue
+            expected = clean_text(row.get("reviewed_label", ""))
+            if not PLATE_PATTERN.fullmatch(expected):
+                continue
+            image_path = manifest_path.parent / row["crop_path"]
+            image_bgr = cv2.imread(str(image_path))
+            if image_bgr is None:
+                raise FileNotFoundError(f"Recorte revisado não encontrado: {image_path}")
+            image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+            height, width = image_rgb.shape[:2]
+            samples.append(
+                Sample(
+                    split=row["split"],
+                    image_path=image_path,
+                    expected=expected,
+                    image_rgb=image_rgb,
+                    box=(0, 0, width, height),
+                )
+            )
+    return samples
+
+
+def summarize_rows(
+    experiment_name: str,
+    split: str,
+    rows: list[dict[str, object]],
+) -> dict[str, object]:
+    total_characters = sum(len(str(row["expected"])) for row in rows)
+    return {
+        "experiment": experiment_name,
+        "split": split,
+        "samples": len(rows),
+        "exact_matches": sum(bool(row["exact"]) for row in rows),
+        "exact_accuracy": round(
+            sum(bool(row["exact"]) for row in rows) / len(rows), 6
+        ),
+        "normalized_exact_matches": sum(
+            bool(row["normalized_exact"]) for row in rows
+        ),
+        "normalized_exact_accuracy": round(
+            sum(bool(row["normalized_exact"]) for row in rows) / len(rows), 6
+        ),
+        "character_accuracy": round(
+            1 - sum(int(row["edit_distance"]) for row in rows) / total_characters,
+            6,
+        ),
+        "normalized_character_accuracy": round(
+            1
+            - sum(int(row["normalized_edit_distance"]) for row in rows)
+            / total_characters,
+            6,
+        ),
+        "mean_seconds": round(
+            statistics.mean(float(row["duration_seconds"]) for row in rows), 4
+        ),
+        "median_seconds": round(
+            statistics.median(float(row["duration_seconds"]) for row in rows), 4
+        ),
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compara configurações do EasyOCR.")
     parser.add_argument("--dataset", type=Path, default=Path("dataset/yolo_v2"))
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        help="Manifesto revisado; quando informado, substitui os rótulos por nome.",
+    )
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/easyocr"))
     parser.add_argument("--model-cache", type=Path, default=Path(".cache/easyocr"))
     parser.add_argument("--splits", nargs="+", default=["valid", "test"])
@@ -145,7 +218,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    samples = load_samples(args.dataset, args.splits)
+    samples = (
+        load_reviewed_samples(args.manifest, args.splits)
+        if args.manifest
+        else load_samples(args.dataset, args.splits)
+    )
+    if not samples:
+        raise ValueError("Nenhuma amostra OCR elegível foi encontrada.")
     reader = easyocr.Reader(
         ["pt"],
         gpu=False,
@@ -157,10 +236,7 @@ def main() -> None:
     details = []
     summaries = []
     for experiment in EXPERIMENTS:
-        durations = []
-        exact = 0
-        edit_distance = 0
-        total_characters = 0
+        experiment_rows = []
         for sample in samples:
             input_image = experiment.preprocess(crop_plate(sample, experiment.crop_mode))
             started_at = time.perf_counter()
@@ -171,44 +247,44 @@ def main() -> None:
                 detail=1,
             )
             duration = time.perf_counter() - started_at
-            durations.append(duration)
             if results:
                 _, raw_text, confidence = max(results, key=lambda result: float(result[2]))
             else:
                 raw_text, confidence = "", 0.0
             predicted = clean_text(raw_text)
+            normalized_predicted = normalize_plate_text(predicted)
             is_exact = predicted == sample.expected
+            is_normalized_exact = normalized_predicted == sample.expected
             distance = levenshtein(sample.expected, predicted)
-            exact += is_exact
-            edit_distance += distance
-            total_characters += len(sample.expected)
-            details.append(
-                {
-                    "experiment": experiment.name,
-                    "split": sample.split,
-                    "image": sample.image_path.name,
-                    "expected": sample.expected,
-                    "predicted": predicted,
-                    "exact": is_exact,
-                    "edit_distance": distance,
-                    "confidence": round(float(confidence), 6),
-                    "duration_seconds": round(duration, 4),
-                }
-            )
+            row = {
+                "experiment": experiment.name,
+                "split": sample.split,
+                "image": sample.image_path.name,
+                "expected": sample.expected,
+                "predicted": predicted,
+                "normalized_predicted": normalized_predicted,
+                "exact": is_exact,
+                "normalized_exact": is_normalized_exact,
+                "edit_distance": distance,
+                "normalized_edit_distance": levenshtein(
+                    sample.expected, normalized_predicted
+                ),
+                "confidence": round(float(confidence), 6),
+                "duration_seconds": round(duration, 4),
+            }
+            details.append(row)
+            experiment_rows.append(row)
 
-        summary = {
-            "experiment": experiment.name,
-            "samples": len(samples),
-            "exact_matches": exact,
-            "exact_accuracy": round(exact / len(samples), 6),
-            "character_accuracy": round(1 - edit_distance / total_characters, 6),
-            "mean_seconds": round(statistics.mean(durations), 4),
-            "median_seconds": round(statistics.median(durations), 4),
-        }
+        summary = summarize_rows(experiment.name, "all", experiment_rows)
         summaries.append(summary)
+        for split in args.splits:
+            split_rows = [row for row in experiment_rows if row["split"] == split]
+            if split_rows:
+                summaries.append(summarize_rows(experiment.name, split, split_rows))
         print(
-            f"{experiment.name}: exact={summary['exact_accuracy']:.2%} "
-            f"chars={summary['character_accuracy']:.2%} "
+            f"{experiment.name}: raw={summary['exact_accuracy']:.2%} "
+            f"normalized={summary['normalized_exact_accuracy']:.2%} "
+            f"chars={summary['normalized_character_accuracy']:.2%} "
             f"mean={summary['mean_seconds']:.3f}s"
         )
 
@@ -221,17 +297,7 @@ def main() -> None:
     with summary_path.open("w", encoding="utf-8", newline="") as output_file:
         writer = csv.DictWriter(output_file, fieldnames=summaries[0].keys())
         writer.writeheader()
-        writer.writerows(
-            sorted(
-                summaries,
-                key=lambda row: (
-                    row["exact_accuracy"],
-                    row["character_accuracy"],
-                    -row["mean_seconds"],
-                ),
-                reverse=True,
-            )
-        )
+        writer.writerows(summaries)
     print(f"summary={summary_path}")
     print(f"details={details_path}")
 
