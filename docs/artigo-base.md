@@ -112,9 +112,11 @@ amostras independentes. A divisão de teste contém 45 imagens e 46 instâncias.
 
 As anotações originais contêm caixas, mas não transcrições. Foi criado um fluxo
 que extrai os recortes das caixas verdadeiras e exige revisão manual do texto.
-A primeira execução gerou 135 recortes de validação e teste, dos quais 28 têm
-uma sugestão derivada do nome do arquivo. **[INSERIR quantidade final de placas
-revisadas, distribuição por formato e critérios de exclusão.]**
+A primeira execução gerou 135 recortes de validação e teste. Após inspeção
+manual, 27 foram mantidos com transcrição confirmada e 108 foram ignorados por
+serem placas estrangeiras ou inadequadas ao escopo. As 27 amostras mantidas são
+do padrão brasileiro antigo: 19 pertencem à validação e 8 ao teste. Portanto,
+essa base ainda não permite concluir sobre placas Mercosul.
 
 ### 3.4 Política temporal
 
@@ -165,15 +167,22 @@ como configuração experimental e não como valores universais.
 
 ### 4.2 OCR e pipeline completo
 
-| Configuração | Acerto exato | Tempo médio por placa |
-| --- | ---: | ---: |
-| Seis variações de pré-processamento | 35,71% | 0,936 s |
-| Reconhecimento direto | 50,00% | 0,046 s |
-| Direto com normalização | 67,86% | 0,046 s |
+Onze configurações do EasyOCR foram comparadas usando os rótulos revisados. O
+recorte usado pela aplicação, com lista restrita a caracteres alfanuméricos,
+foi selecionado pelo resultado da validação. A normalização estrutural converte
+confusões compatíveis com as posições de letras e dígitos, mas o sistema de
+autorização ainda exige ao menos uma leitura bruta exatamente igual ao cadastro.
 
-Usando caixas previstas pelo YOLO, o texto normalizado obteve 64,29% de acerto
-exato e 88,27% de acurácia por caractere na amostra preliminar de 28 imagens.
-Esses resultados devem ser recalculados após a revisão manual dos rótulos.
+| Divisão | Amostras | Exato bruto | Exato normalizado | Caracteres normalizados | Tempo médio |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Validação | 19 | 21,05% | 31,58% | 78,95% | 46,1 ms |
+| Teste preliminar | 8 | 12,50% | 62,50% | 82,14% | 44,1 ms |
+| Total descritivo | 27 | 18,52% | 40,74% | 79,89% | 45,5 ms |
+
+O teste contém somente oito placas e já havia sido explorado em etapas
+anteriores. Assim, esses números documentam a baseline revisada, mas não são a
+estimativa final de generalização. O experimento definitivo deverá usar placas
+Mercosul e trajetórias externas mantidas fora da escolha de configuração.
 
 ### 4.3 Vídeos exploratórios
 
@@ -197,7 +206,8 @@ trajetória, o resultado mede viabilidade operacional, não acurácia.
 
 - conjunto de teste pequeno;
 - mistura de países no dataset original;
-- rótulos OCR preliminares inferidos por nomes de arquivo;
+- base OCR revisada limitada a 27 placas brasileiras do padrão antigo;
+- conjunto de teste preliminar já observado durante o desenvolvimento;
 - poucas placas Mercosul confirmadas;
 - vídeos exploratórios sem verdade de referência completa;
 - risco de vazamento se quadros da mesma trajetória forem separados entre
