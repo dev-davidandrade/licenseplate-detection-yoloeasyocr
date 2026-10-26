@@ -26,8 +26,10 @@ uv run python -m scripts.build_ocr_review_set
 ```
 
 Na execução inicial foram geradas 135 amostras. Em 28 delas, o nome do arquivo
-contém uma placa brasileira aparentemente válida. Esses textos são apresentados
-apenas como sugestões e precisam ser conferidos na imagem.
+continha uma placa brasileira aparentemente válida. Depois da revisão manual,
+27 recortes foram mantidos com transcrição confirmada e 108 foram ignorados.
+Todos os recortes mantidos são de placas brasileiras do padrão antigo; ainda é
+necessário adicionar placas Mercosul para medir o cenário-alvo.
 
 Os arquivos são locais e ignorados pelo Git:
 

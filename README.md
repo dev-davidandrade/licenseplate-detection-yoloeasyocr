@@ -92,6 +92,15 @@ os recortes ficam em `artifacts/ocr-review/`; as sugestões derivadas dos nomes
 dos arquivos só viram rótulos após confirmação manual. O protocolo completo
 está em `docs/base-ocr-revisada.md`.
 
+Depois da revisão, compare as configurações do EasyOCR usando os rótulos
+confirmados por uma pessoa:
+
+```powershell
+uv run python -m scripts.compare_easyocr `
+  --manifest artifacts/ocr-review/manifest.csv `
+  --output-dir artifacts/easyocr-reviewed
+```
+
 ## Testes
 
 ```powershell
@@ -100,6 +109,23 @@ uv run python -m unittest discover -s tests -v
 
 Os números da baseline, as limitações do dataset e os experimentos em imagens
 e vídeos estão registrados em `docs/auditoria-inicial.md`.
+
+## Câmera contínua
+
+A entrada WebRTC usa uma fila *latest-only*: se novos quadros chegarem enquanto
+YOLO e EasyOCR estão ocupados, somente o quadro mais recente é convertido e
+analisado. Os anteriores saem da fila e são liberados, evitando atraso crescente
+e consumo desnecessário de memória. A interface mostra separadamente quantos
+quadros foram recebidos, analisados e descartados. A frequência de análise é
+configurável; o vídeo da câmera pode ter 30 FPS sem exigir 30 inferências por
+segundo.
+
+Para câmeras fixas, a barra lateral permite delimitar uma região de interesse
+(ROI), desenhada em amarelo sobre a imagem. Somente essa região chega ao YOLO.
+Leituras só entram no consenso temporal quando satisfazem limites configuráveis
+de confiança do detector, confiança do OCR e qualidade do recorte. Os valores
+iniciais são provisórios e devem ser calibrados na divisão de validação da base
+brasileira, sem ajustar parâmetros no conjunto de teste.
 
 ## Organização principal
 
